@@ -1,0 +1,6 @@
+{
+  "name": "PIM Catalog Data Management Specialist",
+  "description": "Enterprise E-commerce Catalog Data Management & PIM Automation Suite for MPN brand research, matrix SKU generation, UOM normalization, and strict category mapping.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
