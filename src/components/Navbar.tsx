@@ -9,7 +9,8 @@ import {
   Search,
   Sparkles,
   ShieldCheck,
-  UserCheck
+  UserCheck,
+  Zap
 } from "lucide-react";
 
 interface NavbarProps {
@@ -19,6 +20,7 @@ interface NavbarProps {
   onExportExcel: () => void;
   onExportCsv: () => void;
   onOpenCategories: () => void;
+  onOpenAutoMapModal?: () => void;
   totalPimRows: number;
   itemManagerName: string;
 }
@@ -30,6 +32,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onExportExcel,
   onExportCsv,
   onOpenCategories,
+  onOpenAutoMapModal,
   totalPimRows,
   itemManagerName,
 }) => {
@@ -74,6 +77,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Action Buttons */}
           <div className="flex items-center space-x-2">
+            {onOpenAutoMapModal && (
+              <button
+                onClick={onOpenAutoMapModal}
+                className="inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white shadow-sm transition"
+                title="Automatically map products to Category.xlsx reference file"
+              >
+                <Zap className="h-3.5 w-3.5 text-amber-300" />
+                <span className="hidden sm:inline">Auto-Map Categories</span>
+                <span className="sm:hidden">Auto-Map</span>
+              </button>
+            )}
+
             <button
               onClick={onOpenCategories}
               className="inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"

@@ -8,9 +8,10 @@ import { CategoryReferenceViewer } from "./components/CategoryReferenceViewer.ts
 import { RawFeedTable } from "./components/RawFeedTable.tsx";
 import { RowDetailModal } from "./components/RowDetailModal.tsx";
 import { UploadModal } from "./components/UploadModal.tsx";
+import { AutoCategoryMappingModal } from "./components/AutoCategoryMappingModal.tsx";
 
-import { NormalizedPimRow, RawSupplierRow } from "./types/pim.ts";
-import { AUTHORIZED_CATEGORIES } from "./data/categories.ts";
+import { NormalizedPimRow, RawSupplierRow, AutoCategoryMappingResult } from "./types/pim.ts";
+import { AUTHORIZED_CATEGORIES, autoMapProductCategory } from "./data/categories.ts";
 import { SAMPLE_SUPPLIER_FEEDS } from "./data/sampleFeeds.ts";
 import { groupSupplierRows, calculateAuditSummary } from "./utils/pimEngine.ts";
 import * as XLSX from "xlsx";
@@ -59,6 +60,8 @@ export default function App() {
   // Modals state
   const [selectedRow, setSelectedRow] = useState<NormalizedPimRow | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isAutoMapModalOpen, setIsAutoMapModalOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Research studio context
   const [researchTarget, setResearchTarget] = useState<{ brand: string; mpn: string; rawName: string }>({
@@ -126,6 +129,109 @@ export default function App() {
     );
   };
 
+  // Applying bulk automatic category mappings
+  const handleApplyCategoryMappings = (mappings: AutoCategoryMappingResult[]) => {
+    const mapDict = new Map<string, AutoCategoryMappingResult>();
+    mappings.forEach((m) => {
+      mapDict.set(m.id, m);
+      if (m.sku) mapDict.set(m.sku, m);
+    });
+
+    setPimRows((prev) =>
+      prev.map((row) => {
+        const match = mapDict.get(row.id) || mapDict.get(row.SKU);
+        if (match) {
+          return {
+            ...row,
+            Category: match.mappedCategory,
+            "Google Product Category": match.googleProductCategory,
+            "Item Commerce Category": match.itemCommerceCategory,
+            auditNotes: [
+              ...(row.auditNotes || []),
+              `Auto-mapped from Category.xlsx (${match.confidence}% confidence, ${match.matchType})`,
+            ],
+          };
+        }
+        return row;
+      })
+    );
+
+    setToastMessage(`Successfully auto-mapped ${mappings.length} items from Category.xlsx!`);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  // Single-row automatic category mapping using AI
+  const handleAutoMapSingleRow = async (row: NormalizedPimRow) => {
+    try {
+      const res = await fetch("/api/auto-map-categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: [
+            {
+              id: row.id,
+              SKU: row.SKU,
+              MPN: row.MPN,
+              BRAND: row.BRAND,
+              "PRODUCT NAME": row["PRODUCT NAME"],
+              Category: row.Category,
+            },
+          ],
+          useAi: true,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const mapped = data.mappedItems?.[0];
+        if (mapped && mapped.mappedCategory) {
+          const updated: NormalizedPimRow = {
+            ...row,
+            Category: mapped.mappedCategory,
+            "Google Product Category": mapped.googleProductCategory,
+            "Item Commerce Category": mapped.itemCommerceCategory,
+            auditNotes: [
+              ...(row.auditNotes || []),
+              `AI mapped to exact Category.xlsx: ${mapped.mappedCategory} (${mapped.confidence}% confidence, ${mapped.matchType})`,
+            ],
+          };
+          handleUpdatePimRow(updated);
+          setToastMessage(`AI mapped SKU ${row.SKU} to: ${mapped.mappedCategory}`);
+          setTimeout(() => setToastMessage(null), 3500);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("AI single-row mapping fallback to deterministic matcher:", e);
+    }
+
+    // Fallback if API was unavailable
+    const match = autoMapProductCategory(
+      {
+        brand: row.BRAND,
+        mpn: row.MPN,
+        productName: row["PRODUCT NAME"],
+      },
+      categories
+    );
+
+    const parts = match.categoryPath.split(">").map((p) => p.trim());
+    const fallbackUpdated: NormalizedPimRow = {
+      ...row,
+      Category: match.categoryPath,
+      "Google Product Category": match.rootCategory,
+      "Item Commerce Category": parts[parts.length - 1],
+      auditNotes: [
+        ...(row.auditNotes || []),
+        `Auto-mapped from Category.xlsx: ${match.categoryPath} (${match.confidence}% confidence)`,
+      ],
+    };
+
+    handleUpdatePimRow(fallbackUpdated);
+    setToastMessage(`Auto-mapped SKU ${row.SKU} to: ${match.categoryPath}`);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
   const handleOpenResearchForMpn = (brand: string, mpn: string, rawName: string) => {
     setResearchTarget({ brand, mpn, rawName });
     setActiveTab("research");
@@ -189,6 +295,7 @@ export default function App() {
         onExportExcel={handleExportExcel}
         onExportCsv={handleExportCsv}
         onOpenCategories={() => setActiveTab("categories")}
+        onOpenAutoMapModal={() => setIsAutoMapModalOpen(true)}
         totalPimRows={pimRows.length}
         itemManagerName="Sanjay Meghwal"
       />
@@ -205,6 +312,8 @@ export default function App() {
             onSelectRow={(r) => setSelectedRow(r)}
             onUpdateRow={handleUpdatePimRow}
             onOpenResearchForMpn={handleOpenResearchForMpn}
+            onOpenAutoMapModal={() => setIsAutoMapModalOpen(true)}
+            onAutoMapSingleRow={handleAutoMapSingleRow}
           />
         )}
 
@@ -243,15 +352,34 @@ export default function App() {
             categories={categories}
             onUploadCategories={handleUploadCategories}
             categorySource={categorySource}
+            onTriggerAutoMap={() => setIsAutoMapModalOpen(true)}
           />
         )}
       </main>
+
+      {/* Floating Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 z-50 bg-slate-900 border border-indigo-500/60 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center space-x-2.5 text-xs animate-in fade-in slide-in-from-bottom-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+          <span className="font-medium">{toastMessage}</span>
+        </div>
+      )}
 
       {/* Modals */}
       <RowDetailModal
         row={selectedRow}
         onClose={() => setSelectedRow(null)}
         onSave={handleUpdatePimRow}
+        authorizedCategories={categories}
+      />
+
+      <AutoCategoryMappingModal
+        isOpen={isAutoMapModalOpen}
+        onClose={() => setIsAutoMapModalOpen(false)}
+        catalogRows={pimRows}
+        authorizedCategories={categories}
+        categorySource={categorySource}
+        onApplyCategoryMappings={handleApplyCategoryMappings}
       />
 
       <UploadModal

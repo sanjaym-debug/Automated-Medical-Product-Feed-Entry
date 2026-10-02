@@ -1,20 +1,50 @@
 import React, { useState } from "react";
 import { NormalizedPimRow } from "../types/pim.ts";
-import { X, Check, Save, Layers, ShieldCheck, Tag, Info } from "lucide-react";
+import { X, Check, Save, Layers, ShieldCheck, Tag, Info, Zap } from "lucide-react";
+import { autoMapProductCategory } from "../data/categories.ts";
 
 interface RowDetailModalProps {
   row: NormalizedPimRow | null;
   onClose: () => void;
   onSave: (updated: NormalizedPimRow) => void;
+  authorizedCategories?: string[];
 }
 
-export const RowDetailModal: React.FC<RowDetailModalProps> = ({ row, onClose, onSave }) => {
+export const RowDetailModal: React.FC<RowDetailModalProps> = ({
+  row,
+  onClose,
+  onSave,
+  authorizedCategories,
+}) => {
   if (!row) return null;
 
   const [formData, setFormData] = useState<NormalizedPimRow>({ ...row });
 
   const handleChange = (field: keyof NormalizedPimRow, value: any) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleAutoMapCategory = () => {
+    const match = autoMapProductCategory(
+      {
+        brand: formData.BRAND,
+        mpn: formData.MPN,
+        productName: formData["PRODUCT NAME"],
+      },
+      authorizedCategories
+    );
+
+    const parts = match.categoryPath.split(">").map((p) => p.trim());
+    setFormData((prev) => ({
+      ...prev,
+      Category: match.categoryPath,
+      "Google Product Category": match.rootCategory,
+      "Item Commerce Category": parts[parts.length - 1],
+      auditNotes: [
+        ...(prev.auditNotes || []),
+        `Auto-mapped from Category.xlsx: ${match.categoryPath} (${match.confidence}% confidence - ${match.matchType})`,
+      ],
+    }));
   };
 
   const handleSave = () => {
@@ -121,6 +151,17 @@ export const RowDetailModal: React.FC<RowDetailModalProps> = ({ row, onClose, on
                   <span>
                     <strong className="text-slate-500 mr-1">{col.num}.</strong> {col.label}
                   </span>
+                  {col.key === "Category" && (
+                    <button
+                      type="button"
+                      onClick={handleAutoMapCategory}
+                      className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 hover:text-white border border-indigo-500/40 text-[10px] font-medium transition"
+                      title="Automatically map Category from Category.xlsx"
+                    >
+                      <Zap className="h-2.5 w-2.5 text-amber-300" />
+                      <span>Auto-Map from Category.xlsx</span>
+                    </button>
+                  )}
                 </label>
                 <input
                   type="text"

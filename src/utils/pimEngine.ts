@@ -1,4 +1,9 @@
-import { AUTHORIZED_CATEGORIES, getRootCategory, matchCategory } from "../data/categories.ts";
+import {
+  AUTHORIZED_CATEGORIES,
+  getRootCategory,
+  matchCategory,
+  autoMapProductCategory,
+} from "../data/categories.ts";
 import { NormalizedPimRow, RawSupplierRow, RuleAuditSummary } from "../types/pim.ts";
 
 /**
@@ -242,12 +247,18 @@ export function groupSupplierRows(
     const shippingRate = isIndependenceMedical ? "4.80" : "0.00";
 
     const baseTitle = extractBaseTitle(firstRow.productName || "");
-    const matchedCategory = matchCategory(
-      `${brand} ${baseTitle} ${firstRow.rawAttributes || ""}`,
+    const detailedMatch = autoMapProductCategory(
+      {
+        brand,
+        mpn: firstRow.mpn,
+        productName: firstRow.productName || baseTitle,
+        rawAttributes: firstRow.rawAttributes,
+      },
       authorizedCategories
     );
-    const rootCategory = getRootCategory(matchedCategory);
-    const leafCategory = matchedCategory.split(">").pop()?.trim() || matchedCategory;
+    const matchedCategory = detailedMatch.categoryPath;
+    const rootCategory = detailedMatch.rootCategory;
+    const leafCategory = detailedMatch.leafCategory;
 
     if (isMultiVariantFamily) {
       // 1. Create Parent Matrix Item (-MI)

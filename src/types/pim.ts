@@ -89,3 +89,21 @@ export interface RuleAuditSummary {
   strictCategoryMatches: number;
   nonReferenceCategoryWarnings: number;
 }
+
+export interface AutoCategoryMappingResult {
+  id: string;
+  sku: string;
+  mpn: string;
+  brand: string;
+  productName: string;
+  researchedProductType?: string;
+  currentCategory: string;
+  mappedCategory: string;
+  googleProductCategory: string;
+  itemCommerceCategory: string;
+  confidence: number;
+  matchType: string;
+  rationale: string;
+  isChanged: boolean;
+}
+

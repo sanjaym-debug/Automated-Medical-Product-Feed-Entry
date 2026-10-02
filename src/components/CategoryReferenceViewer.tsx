@@ -10,7 +10,8 @@ import {
   ChevronRight,
   Filter,
   Layers,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Zap
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -18,12 +19,14 @@ interface CategoryReferenceViewerProps {
   categories: string[];
   onUploadCategories: (newCats: string[]) => void;
   categorySource: string;
+  onTriggerAutoMap?: () => void;
 }
 
 export const CategoryReferenceViewer: React.FC<CategoryReferenceViewerProps> = ({
   categories = AUTHORIZED_CATEGORIES,
   onUploadCategories,
   categorySource,
+  onTriggerAutoMap,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRoot, setSelectedRoot] = useState<string>("all");
@@ -123,6 +126,17 @@ export const CategoryReferenceViewer: React.FC<CategoryReferenceViewerProps> = (
 
         {/* Action Buttons */}
         <div className="flex items-center space-x-2">
+          {onTriggerAutoMap && (
+            <button
+              onClick={onTriggerAutoMap}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white shadow-sm transition"
+              title="Automatically map all catalog products using this reference list"
+            >
+              <Zap className="h-3.5 w-3.5 text-amber-300" />
+              <span>Auto-Map Catalog Products</span>
+            </button>
+          )}
+
           <label className="cursor-pointer inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-medium rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
             <Upload className="h-3.5 w-3.5 text-indigo-400" />
             <span>Upload Category.xlsx</span>

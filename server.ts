@@ -4,7 +4,7 @@ import path from "path";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import * as XLSX from "xlsx";
-import { AUTHORIZED_CATEGORIES, getRootCategory, matchCategory } from "./src/data/categories.ts";
+import { AUTHORIZED_CATEGORIES, getRootCategory, matchCategory, autoMapProductCategory } from "./src/data/categories.ts";
 
 dotenv.config();
 
@@ -43,9 +43,8 @@ function loadAuthorizedCategories(): string[] {
         const row = data[i];
         if (Array.isArray(row) && row[0]) {
           const val = String(row[0]).trim();
-          // skip header row if contains "Category" or "Level"
-          if (i === 0 && val.toLowerCase().includes("category path")) continue;
-          if (val.length > 2 && !paths.includes(val)) {
+          if (val === "Category" || val === "Category Path" || val === "Root Category") continue;
+          if (val.includes(">") && !paths.includes(val)) {
             paths.push(val);
           }
         }
@@ -133,6 +132,257 @@ app.post("/api/categories/upload", (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/auto-map-categories
+ * Uses Gemini AI to map products to the most relevant category path,
+ * strictly and exclusively taking the exact names of the categories from Category.xlsx.
+ */
+app.post("/api/auto-map-categories", async (req: Request, res: Response) => {
+  try {
+    const { items, useAi = true } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "items array is required" });
+    }
+
+    const authorizedList = loadAuthorizedCategories();
+    const mappedResults: any[] = [];
+
+    // Helper to snap to exact literal string from authorizedList
+    const snapToExactCategory = (candidate: string): string => {
+      if (!candidate) return authorizedList[0];
+      const trimmed = candidate.trim().replace(/^["']|["']$/g, "");
+      // 1. Exact case-sensitive match
+      const exact = authorizedList.find((c) => c === trimmed);
+      if (exact) return exact;
+      // 2. Case-insensitive exact match
+      const ci = authorizedList.find((c) => c.toLowerCase() === trimmed.toLowerCase());
+      if (ci) return ci;
+      // 3. Normalized delimiter match (e.g. if spaces around > differ)
+      const normCandidate = trimmed.replace(/\s*>\s*/g, " > ").toLowerCase();
+      const normMatch = authorizedList.find(
+        (c) => c.replace(/\s*>\s*/g, " > ").toLowerCase() === normCandidate
+      );
+      if (normMatch) return normMatch;
+      // 4. Closest leaf/keyword match strictly from authorizedList
+      return matchCategory(trimmed, authorizedList);
+    };
+
+    let aiMappedSuccessfully = false;
+    let lastAiError: string | null = null;
+
+    // Use Gemini 3.8 Flash as the primary AI mapper
+    if (apiKey && useAi !== false) {
+      try {
+        const categoryListString = authorizedList
+          .map((c, idx) => `${idx + 1}. "${c}"`)
+          .join("\n");
+
+        // Process in batches of up to 25 items
+        const batchSize = 25;
+        const batches = [];
+        for (let i = 0; i < items.length; i += batchSize) {
+          batches.push(items.slice(i, i + batchSize));
+        }
+
+        const aiResponses = await Promise.all(
+          batches.map(async (batch, bIdx) => {
+            const prompt = `You are an expert E-Commerce Catalog & Healthcare PIM Specialist.
+Your primary objective is to RELY DEEPLY ON THE PRODUCT NAME AND PRODUCT TYPE THROUGH AI RESEARCH TO MAP TO THE CORRECT CATEGORY strictly from the provided Category reference file.
+
+INSTRUCTIONS:
+1. PRODUCT NAME & TYPE RESEARCH:
+   - Deeply inspect the product name, descriptive keywords, formulation, dimensions, active ingredients, and specifications.
+   - Accurately deduce and identify the functional/clinical Product Type (for example: "Tubular Elastic Net Dressing Retainer", "Disposable Tympanic Thermometer Probe Cover", "Pediatric Liquid Acetaminophen Suspension", "2-Way Indwelling Foley Catheter", "Digital Upper Arm Blood Pressure Monitor", "Self-Adherent Cohesive Compression Bandage", etc.).
+2. STRICT CATEGORY SELECTION:
+   - Relying on the researched Product Name and identified Product Type, select the single most accurate and relevant category path from the Authorized Category reference list below.
+   - CRITICAL: "bestCategoryPath" MUST be an EXACT literal match to one of the category paths listed below from the Category file. Do not invent, alter, or abbreviate category names under any circumstances.
+3. ID PRESERVATION: You MUST retain the exact "id" given for each product in your JSON output.
+
+AUTHORIZED CATEGORY PATHS FROM CATEGORY FILE:
+${categoryListString}
+
+PRODUCTS TO MAP:
+${JSON.stringify(
+  batch.map((item, idx) => ({
+    id: String(item.id || item.SKU || `item-${bIdx * batchSize + idx}`),
+    brand: item.brand || item.BRAND || "",
+    mpn: item.mpn || item.MPN || "",
+    productName: item.productName || item["PRODUCT NAME"] || "",
+    rawAttributes: item.rawAttributes || "",
+  }))
+)}
+
+Respond in strictly valid JSON format with a JSON array:
+[
+  {
+    "id": string,
+    "researchedProductType": string, // The specific product type identified through research (e.g. "Tubular Elastic Net Dressing Retainer")
+    "bestCategoryPath": string, // EXACT string from the authorized Category list
+    "confidence": number, // 0 to 100
+    "rationale": string // Detailed explanation of how product name and researched type map to this exact category
+  }
+]`;
+
+            const aiResponse = await ai.models.generateContent({
+              model: "gemini-3.8-flash",
+              contents: prompt,
+              config: {
+                temperature: 0.1,
+                responseMimeType: "application/json",
+              },
+            });
+
+            const text = (aiResponse.text || "[]").trim();
+            const cleanText = text.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+            try {
+              return JSON.parse(cleanText);
+            } catch (pErr) {
+              console.error("Failed to parse AI JSON:", text);
+              return [];
+            }
+          })
+        );
+
+        const flattenedAiResults = aiResponses.flat();
+        const aiMap = new Map<string, any>();
+        flattenedAiResults.forEach((res, idx) => {
+          if (res && res.id) {
+            aiMap.set(String(res.id), res);
+          }
+          aiMap.set(`idx-${idx}`, res);
+        });
+
+        // Assemble mapped results
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const itemId = String(item.id || item.SKU || `item-${i}`);
+          const aiItem = aiMap.get(itemId) || aiMap.get(`idx-${i}`) || flattenedAiResults[i];
+
+          const categoryCandidate = aiItem?.bestCategoryPath || "";
+          if (categoryCandidate) {
+            const exactCategory = snapToExactCategory(categoryCandidate);
+            const parts = exactCategory.split(">").map((p) => p.trim());
+            const currentCat = item.currentCategory || item.Category || "";
+            const isChanged = currentCat !== exactCategory;
+            const conf = aiItem.confidence
+              ? (aiItem.confidence <= 1 ? Math.round(aiItem.confidence * 100) : Math.round(aiItem.confidence))
+              : 96;
+
+            mappedResults.push({
+              id: itemId,
+              sku: item.SKU || item.sku || "",
+              mpn: item.mpn || item.MPN || "",
+              brand: item.brand || item.BRAND || "",
+              productName: item.productName || item["PRODUCT NAME"] || "",
+              researchedProductType: aiItem.researchedProductType || parts[parts.length - 1],
+              currentCategory: currentCat,
+              mappedCategory: exactCategory,
+              googleProductCategory: parts[0],
+              itemCommerceCategory: parts[parts.length - 1],
+              confidence: conf,
+              matchType: "AI Product Name & Type Research",
+              rationale: aiItem.rationale || `Researched type: ${aiItem.researchedProductType || parts[parts.length - 1]} mapped to ${exactCategory}`,
+              isChanged,
+            });
+          } else {
+            const match = autoMapProductCategory(
+              {
+                brand: item.brand || item.BRAND,
+                mpn: item.mpn || item.MPN,
+                productName: item.productName || item["PRODUCT NAME"] || "",
+                rawAttributes: item.rawAttributes || "",
+              },
+              authorizedList
+            );
+            const exactCategory = snapToExactCategory(match.categoryPath);
+            const parts = exactCategory.split(">").map((p) => p.trim());
+            const currentCat = item.currentCategory || item.Category || "";
+
+            mappedResults.push({
+              id: itemId,
+              sku: item.SKU || item.sku || "",
+              mpn: item.mpn || item.MPN || "",
+              brand: item.brand || item.BRAND || "",
+              productName: item.productName || item["PRODUCT NAME"] || "",
+              researchedProductType: match.researchedProductType || parts[parts.length - 1],
+              currentCategory: currentCat,
+              mappedCategory: exactCategory,
+              googleProductCategory: parts[0],
+              itemCommerceCategory: parts[parts.length - 1],
+              confidence: match.confidence,
+              matchType: match.matchType,
+              rationale: match.rationale,
+              isChanged: currentCat !== exactCategory,
+            });
+          }
+        }
+
+        if (mappedResults.length > 0) {
+          aiMappedSuccessfully = true;
+        }
+      } catch (aiErr: any) {
+        lastAiError = aiErr ? String(aiErr.message || aiErr) : "Unknown AI error";
+        console.warn("AI categorization notice (using deterministic exact matcher fallback):", aiErr);
+      }
+    }
+
+    // Complete fallback only if mappedResults is empty
+    if (mappedResults.length === 0) {
+      for (const item of items) {
+        const match = autoMapProductCategory(
+          {
+            brand: item.brand || item.BRAND,
+            mpn: item.mpn || item.MPN,
+            productName: item.productName || item["PRODUCT NAME"] || "",
+            rawAttributes: item.rawAttributes || "",
+          },
+          authorizedList
+        );
+
+        const exactCategory = snapToExactCategory(match.categoryPath);
+        const parts = exactCategory.split(">").map((p) => p.trim());
+        const currentCat = item.currentCategory || item.Category || "";
+        const isChanged = currentCat !== exactCategory;
+
+        mappedResults.push({
+          id: item.id || item.SKU,
+          sku: item.SKU || item.sku || "",
+          mpn: item.mpn || item.MPN || "",
+          brand: item.brand || item.BRAND || "",
+          productName: item.productName || item["PRODUCT NAME"] || "",
+          researchedProductType: match.researchedProductType || parts[parts.length - 1],
+          currentCategory: currentCat,
+          mappedCategory: exactCategory,
+          googleProductCategory: parts[0],
+          itemCommerceCategory: parts[parts.length - 1],
+          confidence: match.confidence,
+          matchType: match.matchType,
+          rationale: match.rationale,
+          isChanged,
+        });
+      }
+    }
+
+    const changedCount = mappedResults.filter((r) => r.isChanged).length;
+    const avgConfidence =
+      mappedResults.reduce((acc, r) => acc + r.confidence, 0) / (mappedResults.length || 1);
+
+    return res.json({
+      success: true,
+      mappedItems: mappedResults,
+      total: mappedResults.length,
+      changedCount,
+      averageConfidence: Math.round(avgConfidence),
+      categorySource: fs.existsSync(CATEGORY_FILE_PATH) ? "Category.xlsx" : "Built-in Authorized Reference",
+      isAiPowered: aiMappedSuccessfully,
+      aiError: lastAiError,
+    });
+  } catch (err: any) {
+    console.error("Auto category mapping error:", err);
+    return res.status(500).json({ error: err.message || "Failed to auto-map categories" });
+  }
+});
+
+/**
  * POST /api/research-mpn
  * Uses Gemini 3.8 Flash with Google Search grounding to verify official manufacturer
  * attributes for Brand + MPN, normalize product title sequence (Name, color, flavor etc),
@@ -146,29 +396,34 @@ app.post("/api/research-mpn", async (req: Request, res: Response) => {
   }
 
   const authorizedList = loadAuthorizedCategories();
-  const sampleCategoriesForPrompt = authorizedList.slice(0, 50).join("\n");
+  const categoryListString = authorizedList.map((c, i) => `${i + 1}. "${c}"`).join("\n");
 
-  const prompt = `You are an expert E-commerce Catalog PIM Specialist.
-Perform research on this product using its Brand and MPN (Model Number / Manufacturer Part Number):
+  const prompt = `You are an expert E-Commerce Catalog & Healthcare PIM Specialist.
+Perform comprehensive AI research on this product relying deeply on the Product Name, Vendor Text, Brand, and MPN to determine its clinical/functional Product Type and map it to the correct Category strictly from the Category reference file:
 - Brand: "${brand || "Unknown"}"
 - MPN: "${mpn || "Unknown"}"
 - Raw Vendor Text: "${rawName || ""}"
 - Vendor: "${vendor || ""}"
 - Raw UOM: "${uom || ""}"
 
-TASK:
-1. Verify official manufacturer naming and specifications for this MPN & Brand.
-2. Construct the normalized base product name following the exact sequence: "Name, color, flavor etc" (omit packaging terms like Box of 50, Bag of 100, or Each from this base title).
-3. Identify official attributes: color, flavor, size, packaging multiplier, packaging unit.
-4. Select the deepest, most accurate matching hierarchical category path strictly from the authorized Category Reference list.
+RESEARCH OBJECTIVES:
+1. RELY ON PRODUCT NAME AND TYPE THROUGH AI SEARCH RESEARCH:
+   - Search and verify official manufacturer specifications, active ingredients, formulation, and clinical purpose.
+   - Accurately identify and determine the precise Product Type (e.g. "Tubular Elastic Net Dressing Retainer", "Tympanic Thermometer Probe Cover", "Pediatric Liquid Acetaminophen Suspension", "2-Way Indwelling Foley Catheter", "Digital Upper Arm Blood Pressure Monitor", etc.).
+2. MAP CORRECT CATEGORY FROM CATEGORY FILE:
+   - Rely on the researched Product Name and Product Type to select the single most accurate, deepest category path from the Authorized Categories reference list below.
+   - CRITICAL CONSTRAINT: "bestCategoryPath" MUST be an EXACT literal match to one of the category paths listed below from the Category file.
+3. CONSTRUCT NORMALIZED BASE TITLE:
+   - Construct the normalized base product name following the exact sequence: "Name, color, flavor etc" (strictly omit packaging quantities like Box of 50, Bag of 100, or Each from this base title).
 
-Authorized Categories reference sample (pick the most accurate matching path or closest standard match):
-${sampleCategoriesForPrompt}
+AUTHORIZED CATEGORY PATHS FROM CATEGORY FILE:
+${categoryListString}
 
 Respond in strictly valid JSON format with keys:
 {
   "officialBrand": string,
   "officialMpn": string,
+  "researchedProductType": string,
   "normalizedBaseTitle": string,
   "color": string,
   "flavor": string,

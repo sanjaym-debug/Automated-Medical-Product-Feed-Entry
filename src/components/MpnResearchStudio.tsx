@@ -266,6 +266,23 @@ export const MpnResearchStudio: React.FC<MpnResearchStudioProps> = ({
 
             {researchResult && !loading && (
               <div className="mt-4 space-y-4 text-xs">
+                {/* Researched Product Type Badge */}
+                {researchResult.researchedProductType && (
+                  <div className="bg-indigo-950/40 p-3 rounded-xl border border-indigo-800/40 flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] uppercase font-semibold text-indigo-300">
+                        Researched Product Type:
+                      </span>
+                      <p className="text-xs font-bold text-white">
+                        {researchResult.researchedProductType}
+                      </p>
+                    </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      Product Name & Type Grounded
+                    </span>
+                  </div>
+                )}
+
                 {/* Normalized Title Comparison */}
                 <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
                   <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">

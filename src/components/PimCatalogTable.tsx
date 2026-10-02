@@ -12,7 +12,8 @@ import {
   Truck,
   BookmarkCheck,
   Columns,
-  Download
+  Download,
+  Zap
 } from "lucide-react";
 
 interface PimCatalogTableProps {
@@ -20,6 +21,8 @@ interface PimCatalogTableProps {
   onSelectRow: (row: NormalizedPimRow) => void;
   onUpdateRow: (row: NormalizedPimRow) => void;
   onOpenResearchForMpn?: (brand: string, mpn: string, rawName: string) => void;
+  onOpenAutoMapModal?: () => void;
+  onAutoMapSingleRow?: (row: NormalizedPimRow) => void;
 }
 
 export const PimCatalogTable: React.FC<PimCatalogTableProps> = ({
@@ -27,6 +30,8 @@ export const PimCatalogTable: React.FC<PimCatalogTableProps> = ({
   onSelectRow,
   onUpdateRow,
   onOpenResearchForMpn,
+  onOpenAutoMapModal,
+  onAutoMapSingleRow,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "parents" | "children" | "single" | "indemed">("all");
@@ -171,6 +176,17 @@ export const PimCatalogTable: React.FC<PimCatalogTableProps> = ({
             <Truck className="h-3 w-3" />
             <span>Indemed ($4.80)</span>
           </button>
+
+          {onOpenAutoMapModal && (
+            <button
+              onClick={onOpenAutoMapModal}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 text-white font-medium text-xs shadow-md shadow-indigo-600/20 transition shrink-0 ml-1"
+              title="Automatically map categories from Category.xlsx for all products"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              <span>Auto-Map Categories</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -502,9 +518,23 @@ export const PimCatalogTable: React.FC<PimCatalogTableProps> = ({
 
                     {/* 25. Category */}
                     <td className="p-3 text-slate-200 max-w-sm truncate" title={row.Category}>
-                      <span className="text-slate-300 hover:text-white">
-                        {row.Category}
-                      </span>
+                      <div className="flex items-center justify-between group">
+                        <span className="text-slate-300 hover:text-white truncate">
+                          {row.Category}
+                        </span>
+                        {onAutoMapSingleRow && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAutoMapSingleRow(row);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-cyan-400 transition ml-1 shrink-0"
+                            title="Auto-map this product from Category.xlsx"
+                          >
+                            <Zap className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
                     </td>
 
                     {/* Actions */}
@@ -517,6 +547,16 @@ export const PimCatalogTable: React.FC<PimCatalogTableProps> = ({
                         >
                           <Eye className="h-3.5 w-3.5" />
                         </button>
+
+                        {onAutoMapSingleRow && (
+                          <button
+                            onClick={() => onAutoMapSingleRow(row)}
+                            className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-indigo-400 transition"
+                            title="Auto-map category from Category.xlsx"
+                          >
+                            <Zap className="h-3.5 w-3.5" />
+                          </button>
+                        )}
 
                         {onOpenResearchForMpn && row.MPN && (
                           <button
